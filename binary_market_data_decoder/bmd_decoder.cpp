@@ -5,7 +5,6 @@
 #include <ctime>
 #include <inttypes.h>
 
-// ─── Byte readers (big-endian) ──────────────────────────────────────
 static uint64_t read_u64(const uint8_t* p) {
     uint64_t v = 0;
     for (int i = 0; i < 8; i++) v = (v << 8) | p[i];
@@ -18,6 +17,10 @@ static uint32_t read_u32(const uint8_t* p) {
     return v;
 }
 
+static uint16_t read_u16(const uint8_t* p) {
+    return (p[0] << 8) | p[1];
+}
+
 static void read_str(const uint8_t* p, int len, char* out) {
     memcpy(out, p, len);
     out[len] = '\0';
@@ -25,23 +28,23 @@ static void read_str(const uint8_t* p, int len, char* out) {
         out[i] = '\0';
 }
 
-static void print_timestamp(uint64_t ns) {
-    time_t sec = ns / 1000000000ULL;
-    uint32_t nsec = ns % 1000000000ULL;
-    sec += 9 * 3600;
-    struct tm tm;
-    gmtime_r(&sec, &tm);
-    printf("%04d-%02d-%02d %02d:%02d:%02d.%09u JST",
-           tm.tm_year + 1900, tm.tm_mon + 1, tm.tm_mday,
-           tm.tm_hour, tm.tm_min, tm.tm_sec, nsec);
-}
-
 static void print_separator() {
     printf("────────────────────────────────────────────────\n");
 }
 
-// ─── Message decoder ────────────────────────────────────────────────
-static int decode_message(const uint8_t* data, int remaining, int msg_num) {
+static void print_hex(const uint8_t* data, int len) {
+    printf("  Hex: ");
+    for (int i = 0; i < len; i++) {
+        printf("%02X ", data[i]);
+        if ((i + 1) % 16 == 0 && i + 1 < len)
+            printf("\n       ");
+    }
+    printf("\n");
+}
+
+// MsgDecoder
+static int decode_message(const uint8_t* data, int remaining, int msg_num,
+                          const char* session, uint64_t seq_num) {
     if (remaining < 1) return 0;
     char type = (char)data[0];
     int consumed = 0;
@@ -56,10 +59,13 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         char evt = (char)data[13];
         printf("  (SystemEvent)\n");
         print_separator();
-        printf("  Timestamp       : "); print_timestamp(ts); printf("\n");
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  Timestamp       : %" PRIu64 "\n", ts);
         printf("  MarketCode      : %s\n", mkt);
         printf("  SystemEvent     : '%c'\n", evt);
         consumed = 14;
+        print_hex(data, consumed);
         break;
     }
     case 'R': {
@@ -76,7 +82,9 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         uint64_t lower = read_u64(data + 51);
         printf("  (ReferencePrice)\n");
         print_separator();
-        printf("  Timestamp       : "); print_timestamp(ts); printf("\n");
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  Timestamp       : %" PRIu64 "\n", ts);
         printf("  SecurityId      : %s\n", secid);
         printf("  ISINCode        : %s\n", isin);
         printf("  MarketCode      : %s\n", mkt);
@@ -87,6 +95,7 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         printf("  UpperPriceLimit : %" PRIu64 "\n", upper);
         printf("  LowerPriceLimit : %" PRIu64 "\n", lower);
         consumed = 59;
+        print_hex(data, consumed);
         break;
     }
     case 'H': {
@@ -97,11 +106,14 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         char state = (char)data[17];
         printf("  (TradingStatus)\n");
         print_separator();
-        printf("  Timestamp       : "); print_timestamp(ts); printf("\n");
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  Timestamp       : %" PRIu64 "\n", ts);
         printf("  SecurityId      : %s\n", secid);
         printf("  MarketCode      : %s\n", mkt);
         printf("  TradingState    : '%c'\n", state);
         consumed = 18;
+        print_hex(data, consumed);
         break;
     }
     case 'J': {
@@ -114,13 +126,16 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         uint64_t lower = read_u64(data + 33);
         printf("  (PriceLimitUpdate)\n");
         print_separator();
-        printf("  Timestamp       : "); print_timestamp(ts); printf("\n");
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  Timestamp       : %" PRIu64 "\n", ts);
         printf("  SecurityId      : %s\n", secid);
         printf("  MarketCode      : %s\n", mkt);
         printf("  ReferencePrice  : %" PRIu64 "\n", ref);
         printf("  UpperPriceLimit : %" PRIu64 "\n", upper);
         printf("  LowerPriceLimit : %" PRIu64 "\n", lower);
         consumed = 33;
+        print_hex(data, consumed);
         break;
     }
     case 'P': {
@@ -137,7 +152,9 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         uint64_t match = read_u64(data + 40);
         printf("  (Trade)\n");
         print_separator();
-        printf("  Timestamp       : "); print_timestamp(ts); printf("\n");
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  Timestamp       : %" PRIu64 "\n", ts);
         printf("  SecurityId      : %s\n", secid);
         printf("  MarketCode      : %s\n", mkt);
         printf("  TradeDate       : %u\n", tdate);
@@ -148,6 +165,7 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         printf("  ExecutionPrice  : %" PRIu64 "\n", price);
         printf("  MatchNumber     : %" PRIu64 "\n", match);
         consumed = 48;
+        print_hex(data, consumed);
         break;
     }
     case 'G': {
@@ -155,8 +173,11 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
         uint64_t seq = read_u64(data + 1);
         printf("  (SequenceReset)\n");
         print_separator();
-        printf("  SequenceNumber  : %" PRIu64 "\n", seq);
+        printf("  Session         : %s\n", session);
+        printf("  SequenceNumber  : %" PRIu64 "\n", seq_num);
+        printf("  ResetSeqNumber  : %" PRIu64 "\n", seq);
         consumed = 9;
+        print_hex(data, consumed);
         break;
     }
     default:
@@ -168,7 +189,7 @@ static int decode_message(const uint8_t* data, int remaining, int msg_num) {
     return consumed;
 }
 
-// ─── Pcap reader ────────────────────────────────────────────────────
+// PCAP File parser
 int decode_pcap(const char* filename, int max_packets, int skip_moldudp) {
     FILE* fp = fopen(filename, "rb");
     if (!fp) {
@@ -227,38 +248,53 @@ int decode_pcap(const char* filename, int max_packets, int skip_moldudp) {
         printf("Packet #%d  Capture Time: %02d:%02d:%02d.%0*u JST  Size: %u bytes\n",
                pkt_num, tm.tm_hour, tm.tm_min, tm.tm_sec,
                nano_ts ? 9 : 6, ts_frac, orig_len);
+
+        if (incl_len >= 42) {
+            const uint8_t* ip = pkt + 14;
+            const uint8_t* udp = pkt + 34;
+            uint16_t src_port = read_u16(udp);
+            uint16_t dst_port = read_u16(udp + 2);
+            printf("  %u.%u.%u.%u:%u > %u.%u.%u.%u:%u (UDP)\n",
+                   ip[12], ip[13], ip[14], ip[15], src_port,
+                   ip[16], ip[17], ip[18], ip[19], dst_port);
+        }
         printf("════════════════════════════════════════════════\n");
 
-        // Skip Ethernet(14) + IP(20) + UDP(8) = 42 bytes
         int offset = 42;
 
         if (skip_moldudp) {
-            if ((int)incl_len > offset + 20) {
-                uint16_t msg_count = (uint16_t)pkt[offset + 18] << 8 | pkt[offset + 19];
-                printf("  MoldUDP64: MessageCount=%u\n\n", msg_count);
+            if ((int)incl_len >= offset + 20) {
+                // Parse MoldUDP64 header
+                char session[11];
+                memcpy(session, pkt + offset, 10);
+                session[10] = '\0';
+                uint64_t base_seq = read_u64(pkt + offset + 10);
+                uint16_t msg_count = read_u16(pkt + offset + 18);
                 offset += 20;
+
+                if (msg_count == 0) {
+                    printf("  (Heartbeat)\n\n");
+                    free(pkt);
+                    continue;
+                }
+
+                for (uint16_t m = 0; m < msg_count && offset < (int)incl_len; m++) {
+                    if (offset + 2 > (int)incl_len) break;
+                    uint16_t msg_len = read_u16(pkt + offset);
+                    offset += 2;
+                    if (msg_len == 0 || offset + msg_len > (int)incl_len) break;
+                    decode_message(pkt + offset, msg_len, m + 1, session, base_seq + m);
+                    offset += msg_len;
+                }
             }
-        }
-
-        int msg_num = 0;
-        while (offset < (int)incl_len) {
-            msg_num++;
-
-            int msg_len = 0;
-            if (skip_moldudp) {
-                if (offset + 2 > (int)incl_len) break;
-                msg_len = (uint16_t)pkt[offset] << 8 | pkt[offset + 1];
-                offset += 2;
-                if (msg_len == 0 || offset + msg_len > (int)incl_len) break;
-            }
-
-            int consumed = decode_message(pkt + offset, incl_len - offset, msg_num);
-            if (consumed == 0) break;
-
-            if (skip_moldudp && msg_len > 0)
-                offset += msg_len;
-            else
+        } else {
+            int msg_num = 0;
+            while (offset < (int)incl_len) {
+                msg_num++;
+                int consumed = decode_message(pkt + offset, incl_len - offset, msg_num, "", 0);
+                if (consumed == 0) break;
                 offset += consumed;
+            }
         }
 
         free(pkt);
@@ -274,11 +310,14 @@ void print_usage(const char* prog) {
     printf("Usage: %s [OPTIONS] <pcap_file>\n\n", prog);
     printf("Options:\n");
     printf("  -n NUM     Decode first NUM packets only (default: all)\n");
-    printf("  -m         Skip MoldUDP64 header (20 bytes + 2-byte msg length prefix)\n");
+    printf("  -m         Parse MoldUDP64 transport header\n");
     printf("  -h         Show this help\n\n");
+    printf("Message types: S=SystemEvent, R=ReferencePrice, H=TradingStatus,\n");
+    printf("               J=PriceLimitUpdate, P=Trade, G=SequenceReset\n\n");
     printf("Examples:\n");
     printf("  %s capture.pcap\n", prog);
-    printf("  %s -m -n 5 capture.pcap\n", prog);
+    printf("  %s -m capture.pcap\n", prog);
+    printf("  %s -m -n 10 capture.pcap\n", prog);
 }
 
 int main(int argc, char* argv[]) {
